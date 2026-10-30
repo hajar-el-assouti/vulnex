@@ -1,0 +1,52 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+
+# Databases and private scan data
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+# Generated reports (not source code folders named "reports")
+backend/data/reports/
+backups/
+pentest-backups/
+scan-results/
+*.dump
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

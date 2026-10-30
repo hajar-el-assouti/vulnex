@@ -1,0 +1,189 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # No ":-fallback" defaults: docker compose fails to start the
+      # container with an empty password rather than silently using one.
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Not published to the host: only `backend`, on the internal compose
+    # network, needs to reach Postgres. For local psql access during
+    # development, use `docker compose exec postgres psql -U ... ` instead
+    # of opening the port to the host.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Shared rate-limit counters (login/registration) -- see
+    # app/core/rate_limit.py. No persistence needed: counters are
+    # short-lived (PEXPIRE'd to the rate-limit window) and losing them
+    # on a restart just means a clean slate, not a security hole.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # Not published to the host, same reasoning as Postgres above: only
+    # `backend`, over the internal compose network, needs to reach it.
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    # Generated reports (report_storage_dir, default "data/reports" under
+    # WORKDIR /app) are stored in a named volume, so they survive image
+    # rebuilds and container restarts, like postgres_data.
+    volumes:
+      - report_data:/app/data/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Bound to localhost only: fine for local dev, not reachable from the
+    # network. A real deployment puts a reverse proxy / TLS in front and
+    # drops this host port mapping entirely.
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Apply migrations, then start the API. Split into a separate one-shot
+    # "migrate" service if we ever run several backend replicas, so they
+    # don't race to migrate.
+    #
+    # --forwarded-allow-ips="": by default uvicorn trusts X-Forwarded-For
+    # from 127.0.0.1 and rewrites the client address before the app's
+    # _client_ip() (app/api/v1/endpoints/auth.py) sees it, which would let
+    # a caller spoof the IP used for login/registration rate limiting.
+    # Nothing here needs forwarded headers: the BFF strips any
+    # client-supplied X-Forwarded-For, and sessions are cookie-based.
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips="
+    healthcheck:
+      # Readiness (checks DB connectivity), not liveness -- see
+      # app/api/v1/endpoints/health.py. A container that's up but can't
+      # reach Postgres should be reported unhealthy by Docker.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Runs scans, separately from the FastAPI process (see
+  # app/tasks/scan_tasks.py, app/celery_app.py). A worker crash or a hung
+  # module must not take the API down, and vice versa.
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      # Celery's broker/result-backend DBs (1 and 2) are derived from
+      # this at runtime by app/core/config.py::Settings.celery_broker_url
+      # /celery_result_backend_url (see _with_redis_db) -- deliberately
+      # NOT db 0, which app/core/rate_limit.py's sliding-window limiter
+      # already owns. Same Redis instance, disjoint keyspaces, no shared
+      # env var needed beyond this one.
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # No ports published: a worker has nothing to serve over HTTP, and
+    # nothing on the host or the wider network needs to reach it
+    # directly -- it only ever reaches out to Postgres/Redis on the
+    # internal compose network.
+    command: ["celery", "-A", "app.worker_main", "worker", "--loglevel=info", "--concurrency=2"]
+    healthcheck:
+      # `celery inspect ping` round-trips through the real broker, so
+      # this also catches a worker that's up but can't reach Redis.
+      test: ["CMD-SHELL", "celery -A app.worker_main inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q OK"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    # Limited CPU/RAM so a stuck task can't starve the host, all
+    # capabilities dropped, and no privilege escalation. This is not a full
+    # sandbox: outbound requests to scan targets are restricted at the
+    # application level (app/security/ssrf.py and the engines' network
+    # policies).
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # Periodic reconciliation only (app/tasks/maintenance.py):
+  # reconcile_pending_scans (retry/give-up on stuck PENDING dispatch)
+  # and reconcile_stuck_cancellations (force-finalize a CANCELLING scan
+  # whose worker died). Beat only schedules; it never executes a scan
+  # itself, so it stays a separate, much smaller process from
+  # celery-worker.
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # --schedule=/tmp/celerybeat-schedule: the default schedule file is
+    # relative to /app, where beat hit a permissions error on the Ubuntu VM.
+    # /tmp is always writable by the container user (appuser, uid 1000),
+    # whatever the ownership of /app on the host.
+    command: ["celery", "-A", "app.worker_main", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    # No meaningful self-check exists for a scheduler beyond "is the
+    # process alive" (there's no broker round-trip like `inspect ping`
+    # for beat) -- `restart: unless-stopped` plus the depends_on healthy
+    # gates above are the safety net here, same as Docker's own default
+    # for containers with no healthcheck.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+  # See the `backend` service's volumes comment above.
+  report_data:

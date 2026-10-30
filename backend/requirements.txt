@@ -1,0 +1,35 @@
+# Runtime dependencies.
+fastapi==0.143.2
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.0
+SQLAlchemy==2.1.4
+alembic==1.20.0
+asyncpg==0.32.0
+greenlet==3.5.6
+argon2-cffi==25.1.0
+email-validator==2.3.0
+redis==5.3.1
+
+# Scan orchestration. The `redis` package above covers the redis extra.
+celery[redis]==5.6.3
+
+# Outbound HTTP requests to scan targets
+# (app/engines/recon/security/request_policy.py).
+httpx==0.28.1
+
+# DNS and email security collectors (A/AAAA/MX/NS/CNAME/SOA/TXT, SPF/DMARC)
+# with a fixed resolver list.
+dnspython==2.9.0
+
+# Deep TLS analysis. The stdlib `ssl` module gives the certificate as a
+# dict but not its signature algorithm or key size, which requires parsing
+# the DER bytes. `cryptography` is only used as a read-only certificate
+# parser; the TLS handshake itself is always done by `ssl`.
+cryptography==50.0.2
+
+# PDF/HTML report generation (app/services/reports.py). `reportlab` is pure
+# Python, so no Cairo/Pango/GTK system libraries are needed in the Docker
+# image. `jinja2` renders the HTML report from the same data as the PDF.
+reportlab==4.4.4
+jinja2==3.1.6

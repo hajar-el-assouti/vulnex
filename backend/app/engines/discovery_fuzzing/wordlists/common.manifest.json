@@ -1,0 +1,26 @@
+{
+  "source_repo": "https://github.com/danielmiessler/SecLists",
+  "source_file": "Discovery/Web-Content/common.txt",
+  "source_url": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt",
+  "source_branch_ref_at_fetch": "master",
+  "fetched_at_utc": "2026-10-25T00:00:00Z",
+  "license": "MIT (Daniel Miessler, see LICENSE_SECLISTS.txt in this directory)",
+  "raw_file_sha256": "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a",
+  "raw_line_count": 4752,
+  "cleaned_file_sha256": "831734265312ec6a28d90c2a938a77f56bad929e7d8b71c0fab3f228beb6a034",
+  "cleaned_line_count": 4749,
+  "rejected_count": 2,
+  "rejected_entries": [
+    {
+      "line": 3520,
+      "entry": "render?url=https://www.google.com",
+      "reason": "embedded_scheme (absolute URL inside a path entry)"
+    },
+    {
+      "line": 3521,
+      "entry": "render/https://www.google.com",
+      "reason": "embedded_scheme (absolute URL inside a path entry)"
+    }
+  ],
+  "notes": "This is the single file needed from SecLists, not a clone of the repository. Cleaning rules: trim whitespace, drop empty lines, drop exact duplicates (keep first occurrence, preserving the upstream file's own ordering for determinism), reject any entry containing '://' (an embedded absolute URL rather than a relative path segment), a leading '/', '..', a backslash, a NUL byte, a disallowed control character, or longer than 256 characters. Entries containing literal spaces (e.g. 'Program Files') are kept and percent-encoded by the module at request-build time, never rejected outright."
+}

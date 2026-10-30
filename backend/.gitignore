@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.db
+.DS_Store
+
+# Celery beat's local schedule database (dev-only)
+celerybeat-schedule
+
+# Generated report files (report_storage_dir default in app/core/config.py)
+data/reports/
